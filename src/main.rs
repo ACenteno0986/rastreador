@@ -1,69 +1,137 @@
 extern crate libc; 
 extern crate nix;
 use libc::ptrace;
+use libc::fork;
 use libc::PTRACE_TRACEME;
+use libc::PTRACE_SETOPTIONS;
+use libc::PTRACE_O_TRACESYSGOOD;
+use libc::PTRACE_SYSCALL;
+use libc::WIFSTOPPED;
+use libc::WSTOPSIG;
+use libc::WIFEXITED;
+use libc::PTRACE_PEEKUSER;
+use libc::ORIG_RAX;
+use libc::waitpid;
 use nix::sys::signal::*;
 use crate::ForkResult::Parent;
-use nix::unistd::{fork, ForkResult};
 use nix::unistd::*;
-use nix::sys::ptrace;
 use nix::sys::signal::kill;
 use nix::sys::ptrace::traceme;
 use nix::unistd::getpid;
 use nix::unistd::getppid;
 use nix::sys::wait;
+use libc::execvp;
 use nix::unistd::execv;
 use nix::sys::ptrace::syscall;
 use std::ffi::{CString, CStr};
 use std::env;
+use std::{ptr};
 use std::os::raw::{c_char};
 
-fn nuevo_hijo(arg:&CString) -> Pid{
+
+fn to_exec_array<S: AsRef<CStr>>(args: &[S]) -> Vec<*const c_char> {
+    use std::iter::once;
+    args.iter().map(|s| s.as_ref().as_ptr()).chain(once(ptr::null())).collect()
+}
+
+fn wait_for_syscall(pid:i32) -> i32{
     
-    let hijo;
-        
-    unsafe {
+    let status = 0;
+    let mut x = 0;
+
+        unsafe{
+            ptrace(PTRACE_SYSCALL, pid, 0, 0);
+            waitpid(pid, status as *mut i32, 0);
             
-        hijo = fork();
-           
-        println!("Test1: {}", getpid());
+            if WIFSTOPPED(status) && (WSTOPSIG(status) == 0x80 ){
+                x = 1;
+            }
+            
+            if WIFEXITED(status){
+                x = 0;
+            }
+        }
+        return x;
+}
+
+fn nuevo_hijo(args:Vec<String>) -> i32{
+    
+    
+    let raw = &args[0].as_bytes();
+    let mut vec = Vec::new();
+    let arg;
+    unsafe{
+        arg = CString::from_vec_unchecked(raw.to_vec());
+            
+    }
+        
+    for i in 1..args.len(){
+            
+        unsafe{
+            vec.push(CString::from_vec_unchecked(args[i].as_bytes().to_vec()));
+            
+        }
+    }
+        
+    let args_p = to_exec_array(&vec);
+    let pid;
+    unsafe {
         ptrace(PTRACE_TRACEME);
         kill(getpid(), SIGSTOP);
-        execvp(&arg, &[&arg]);
-            
-        println!("Test2: {}", getpid());
+        pid = execvp(arg.as_ptr(), args_p.as_ptr());
             
     }
+    println!("Test2: {}", pid);
+    pid
     
-    return getpid();
 }
 
-fn steped(arg:&CString){
+fn steped(pid:i32){
     
-    let hijo;
+ 
+            
+        println!("Test2");
+            
+    
+}
+
+
+
+fn fluid(pid:i32){
+    
+    let status = 0;
+    let mut syscall = 0;
+    unsafe{
+        waitpid(pid, status as *mut i32, 0);
+        ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD);
+    }
+    
+    while(true){
         
-    unsafe {
+        if wait_for_syscall(pid) != 0 {
+            break;
             
-        hijo = fork();
-           
-        println!("Test1: {}", getpid());
-            
-        let x = execvp(&arg, &[&arg]);
-            
-        println!("Test2: {}", getpid());
-            
+        } 
+        
+        unsafe{
+            syscall = ptrace(PTRACE_PEEKUSER, pid, ORIG_RAX);
+            println!("Syscall: {}", syscall);
+        }
+        
+        if wait_for_syscall(pid) != 0 {
+            break;
+        }
     }
-}
-
-fn fluid(syscall:&str){
-    //println!("Fluid: {}", syscall);
     
 }
+
 
 fn main() {
     
     let args: Vec<String> = env::args().collect();
     let mut args2 : Vec<String> = Vec::new();
+    
+    
     if args.len() > 2{
         let arg1 = &args[1];
         let arg2 = &args[2];
@@ -82,26 +150,26 @@ fn main() {
             }
         }
         
-        let raw = &args2[0].as_bytes();
-        let argm;
+        let hijo;
         unsafe{
-            argm = CString::from_vec_unchecked(raw.to_vec());
+          
+            hijo = fork();
         }
         
-        if arg1 == "-v"{
-            steped(&argm);
-        
-        }else if arg1 == "-V"{
-            fluid(arg2);
-        
-        }else{
+        if hijo == 0 {
+            nuevo_hijo(args);
             
-            fluid(arg1);
         }
+        else{
+            
+            if arg1 == "-v" || arg1 == "-V"{
+
+                fluid(hijo);
         
-    }else{
-        let arg1 = &args[1];
-        fluid(arg1);
+                println!("{},{}", arg1, arg2);
+            }
+        }
+      
     }
     //println!("{},{}", arg1, arg2);
 }
